@@ -1,0 +1,5 @@
+Nombre: Laura Fernández
+Edad: 34
+Genero: Femenino
+Altura: 1,67
+Nivel de actividad física: alto

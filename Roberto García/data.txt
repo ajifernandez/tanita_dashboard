@@ -1,0 +1,5 @@
+Nombre: Roberto García
+Edad: 52
+Genero: Masculino
+Altura: 1,78
+Nivel de actividad física: sedentario

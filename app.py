@@ -18,16 +18,16 @@ from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.platypus import Image as RLImage
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
-
 plt.switch_backend("Agg")
 
 
 st.set_page_config(
-    page_title="Tanita BC-601 Dashboard",
+    page_title="Tanita Dashboard",
     page_icon="⚕️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
+
 
 def scan_patient_folders(base_dir: Path) -> List[Path]:
     _skip = {".venv", "__pycache__", ".git", ".claude"}
@@ -49,9 +49,11 @@ def scan_patient_folders(base_dir: Path) -> List[Path]:
 
 def parse_patient_data(txt_path: Path) -> Dict[str, str]:
     import unicodedata as _ud
+
     def _norm(s: str) -> str:
         s = _ud.normalize("NFKD", s).encode("ascii", "ignore").decode()
         import re as _re
+
         return _re.sub(r"\s+", " ", _re.sub(r"[^a-z0-9 ]", "", s.lower())).strip()
 
     out: Dict[str, str] = {}
@@ -74,20 +76,57 @@ _patient_folders = scan_patient_folders(_BASE_DIR)
 
 _source_mode = "manual"
 _selected_folder: Optional[Path] = None
+_csv_path: Optional[Path] = None
 _patient_info: Dict[str, str] = {}
 
+_CUSTOM_PATH_LABEL = "📁 Ruta personalizada..."
+
 st.sidebar.markdown("### 📁 Paciente")
-if _patient_folders:
-    _folder_options = ["── Subir archivo ──"] + [f.name for f in _patient_folders]
-    _selected_name = st.sidebar.selectbox("Seleccionar paciente", options=_folder_options, index=0)
-    if _selected_name != "── Subir archivo ──":
-        _source_mode = "folder"
-        _selected_folder = _BASE_DIR / _selected_name
-        _data_txt = _selected_folder / "data.txt"
-        if _data_txt.exists():
-            _patient_info = parse_patient_data(_data_txt)
-else:
-    st.sidebar.caption("No se encontraron carpetas de paciente.")
+_folder_options = ["── Subir archivo ──"] + [f.name for f in _patient_folders] + [_CUSTOM_PATH_LABEL]
+_selected_name = st.sidebar.selectbox("Seleccionar paciente", options=_folder_options, index=0)
+
+if _selected_name == _CUSTOM_PATH_LABEL:
+    if st.sidebar.button("Seleccionar carpeta...", use_container_width=True):
+        import subprocess, sys
+
+        _proc = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import tkinter as tk; from tkinter import filedialog; "
+                "r=tk.Tk(); r.withdraw(); r.wm_attributes('-topmost',1); "
+                "p=filedialog.askdirectory(title='Seleccionar carpeta de paciente'); "
+                "r.destroy(); print(p)",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        _picked = _proc.stdout.strip()
+        if _picked:
+            st.session_state["custom_folder_path"] = _picked
+            st.rerun()
+
+    _custom_path_str = st.session_state.get("custom_folder_path", "")
+    if _custom_path_str:
+        st.sidebar.caption(f"📂 `{Path(_custom_path_str).name}`")
+        _custom_folder = Path(_custom_path_str)
+        _has_csv = (_custom_folder / "DATA.CSV").exists() or (_custom_folder / "DATAX.CSV").exists()
+        if _custom_folder.is_dir() and _has_csv:
+            _source_mode = "folder"
+            _selected_folder = _custom_folder
+            _data_txt = _custom_folder / "data.txt"
+            if _data_txt.exists():
+                _patient_info = parse_patient_data(_data_txt)
+        else:
+            st.sidebar.warning("Carpeta no válida o sin DATA.CSV / DATAX.CSV.")
+    else:
+        st.sidebar.caption("Ninguna carpeta seleccionada.")
+elif _selected_name != "── Subir archivo ──":
+    _source_mode = "folder"
+    _selected_folder = _BASE_DIR / _selected_name
+    _data_txt = _selected_folder / "data.txt"
+    if _data_txt.exists():
+        _patient_info = parse_patient_data(_data_txt)
 
 st.sidebar.markdown("---")
 
@@ -95,8 +134,7 @@ st.sidebar.markdown("---")
 _default_name = _patient_info.get("nombre", "Usuario Tanita")
 _default_gender_idx = (
     1
-    if _patient_info.get("genero", "").lower().startswith("masc")
-    or _patient_info.get("genero", "") in ("m", "M")
+    if _patient_info.get("genero", "").lower().startswith("masc") or _patient_info.get("genero", "") in ("m", "M")
     else 0
 )
 _default_age = 35
@@ -111,9 +149,7 @@ user_name = st.sidebar.text_input("Nombre del Paciente", value=_default_name, ke
 user_gender = st.sidebar.selectbox(
     "Género", options=["Femenino", "Masculino"], index=_default_gender_idx, key=f"ugender_{_wkey}"
 )
-user_age = st.sidebar.number_input(
-    "Edad (años)", min_value=1, max_value=120, value=_default_age, key=f"uage_{_wkey}"
-)
+user_age = st.sidebar.number_input("Edad (años)", min_value=1, max_value=120, value=_default_age, key=f"uage_{_wkey}")
 
 if _patient_info.get("altura"):
     st.sidebar.caption(f"📏 Altura: {_patient_info['altura']} m")
@@ -917,7 +953,9 @@ def identify_segmental_columns(columns: List[str]) -> Dict[str, Dict[Tuple[str, 
     return grouped
 
 
-def choose_segmental_family(grouped_segments: Dict[str, Dict[Tuple[str, str], str]]) -> Tuple[Optional[str], Dict[Tuple[str, str], str]]:
+def choose_segmental_family(
+    grouped_segments: Dict[str, Dict[Tuple[str, str], str]],
+) -> Tuple[Optional[str], Dict[Tuple[str, str], str]]:
     ranked = sorted(
         grouped_segments.items(),
         key=lambda item: (
@@ -976,7 +1014,9 @@ def process_csv(file_bytes: bytes) -> Tuple[pd.DataFrame, Dict[str, object]]:
             processed_df[column] = series.map(parse_numeric_value)
 
     processed_df = processed_df.dropna(how="all")
-    processed_df = processed_df[processed_df["Fecha medición"].notna()].sort_values("Fecha medición").reset_index(drop=True)
+    processed_df = (
+        processed_df[processed_df["Fecha medición"].notna()].sort_values("Fecha medición").reset_index(drop=True)
+    )
     if processed_df.empty:
         raise ValueError("No se pudieron interpretar fechas válidas en el archivo.")
 
@@ -1329,7 +1369,7 @@ def render_report_header(file_name: str, dataframe: pd.DataFrame, detected_label
         <div class="report-banner">
             <div>
                 <div class="report-eyebrow">Body composition analyser report</div>
-                <h1>Tanita BC-601 · Informe clínico de composición corporal</h1>
+                <h1>Informe clínico de composición corporal</h1>
                 <p>
                     Visualización longitudinal con estética de informe técnico, enfocada en lectura rápida,
                     trazabilidad temporal y presentación profesional en consulta o impresión.
@@ -1416,12 +1456,7 @@ def render_summary_panels(
     with right_col:
         insight_cards = "".join(
             [
-                (
-                    f"<div class=\"insight-card\">"
-                    f"<strong>{title}</strong>"
-                    f"<span>{detail}</span>"
-                    f"</div>"
-                )
+                (f'<div class="insight-card">' f"<strong>{title}</strong>" f"<span>{detail}</span>" f"</div>")
                 for title, detail in insights
             ]
         )
@@ -1451,7 +1486,7 @@ def render_metric_cards(
     if not available_keys:
         return False
     for start in range(0, len(available_keys), columns_per_row):
-        chunk = available_keys[start:start + columns_per_row]
+        chunk = available_keys[start : start + columns_per_row]
         card_columns = st.columns(len(chunk))
         for card_column, key in zip(card_columns, chunk):
             with card_column:
@@ -1720,6 +1755,89 @@ def build_pdf_segment_chart_image(chart_df: Optional[pd.DataFrame], title: str) 
     return save_matplotlib_figure(fig)
 
 
+def build_pdf_summary_panels(
+    dataframe: pd.DataFrame,
+    latest_row: pd.Series,
+    metric_columns: Dict[str, Optional[str]],
+    styles,
+):
+    title_s = ParagraphStyle("PDFPanelTitle", fontName="Helvetica-Bold", fontSize=8.5, leading=10,
+                              textColor=colors.HexColor("#16324f"))
+    hdr_s = ParagraphStyle("PDFTblHdr", fontName="Helvetica-Bold", fontSize=6.5, leading=8,
+                            textColor=colors.HexColor("#355879"))
+    cell_s = ParagraphStyle("PDFTblCell", fontName="Helvetica", fontSize=6.5, leading=8,
+                             textColor=colors.HexColor("#183652"))
+    insight_s = ParagraphStyle("PDFInsight", fontName="Helvetica", fontSize=7, leading=9,
+                                textColor=colors.HexColor("#4f6782"))
+
+    # ── Left: summary table ──────────────────────────────────────────────────
+    summary_keys = [k for k in PRIMARY_KPI_KEYS + SECONDARY_KPI_KEYS if metric_columns.get(k)]
+    tbl_data = [[Paragraph("<b>Métrica</b>", hdr_s),
+                 Paragraph("<b>Valor actual</b>", hdr_s),
+                 Paragraph("<b>Evolución</b>", hdr_s)]]
+    tbl_style = [
+        ("GRID", (0, 0), (-1, -1), 0.4, colors.HexColor("#d3dfeb")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#edf5fc")),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+        ("LEFTPADDING", (0, 0), (-1, -1), 4),
+        ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+    ]
+    for _k in summary_keys:
+        _col = metric_columns[_k]
+        _cur = format_metric_value(latest_row.get(_col), str(METRIC_CONFIG[_k]["suffix"]),
+                                   int(METRIC_CONFIG[_k]["decimals"]))
+        _series = dataframe[_col].dropna() if _col in dataframe.columns else pd.Series(dtype=float)
+        if len(_series) >= 2:
+            _delta = float(_series.iloc[-1] - _series.iloc[0])
+            _thr = 1.0 if int(METRIC_CONFIG[_k]["decimals"]) == 0 else 0.1
+            if abs(_delta) < _thr:
+                _dt, _dc = "Estable", "#52667c"
+            else:
+                _hib = METRIC_CONFIG[_k].get("higher_is_better")
+                _dt = format_delta_value(_delta, str(METRIC_CONFIG[_k]["suffix"]),
+                                         int(METRIC_CONFIG[_k]["decimals"])) + " vs inicio"
+                if _hib is None:
+                    _dc = "#52667c"
+                elif (_hib and _delta > 0) or (not _hib and _delta < 0):
+                    _dc = "#1f6f48"
+                else:
+                    _dc = "#9b3a10"
+        else:
+            _dt, _dc = "Sin histórico", "#52667c"
+        _ds = ParagraphStyle(f"DS_{_k}", parent=cell_s, textColor=colors.HexColor(_dc))
+        tbl_data.append([Paragraph(METRIC_CONFIG[_k]["label"], cell_s),
+                         Paragraph(_cur, cell_s),
+                         Paragraph(_dt, _ds)])
+    summary_tbl = Table(tbl_data, colWidths=[120, 72, 110])
+    summary_tbl.setStyle(TableStyle(tbl_style))
+    left_content = [Paragraph("Resumen de medición actual", title_s), Spacer(1, 5), summary_tbl]
+
+    # ── Right: longitudinal insights ─────────────────────────────────────────
+    insights = collect_trend_insights(dataframe, metric_columns, limit=8)
+    right_content: list = [Paragraph("Lectura longitudinal", title_s), Spacer(1, 5)]
+    for _title, _detail in insights:
+        right_content.append(Paragraph(f"<b>{_title}.</b> {_detail}", insight_s))
+        right_content.append(Spacer(1, 5))
+
+    # ── Outer 2-column panel ─────────────────────────────────────────────────
+    _panel_style = [
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+        ("BOX", (0, 0), (0, 0), 0.5, colors.HexColor("#d0ddea")),
+        ("BOX", (1, 0), (1, 0), 0.5, colors.HexColor("#d0ddea")),
+        ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#ffffff")),
+        ("LEFTPADDING", (0, 0), (-1, -1), 9),
+        ("RIGHTPADDING", (0, 0), (0, 0), 9),
+        ("RIGHTPADDING", (1, 0), (1, 0), 9),
+        ("TOPPADDING", (0, 0), (-1, -1), 8),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+    ]
+    panels = Table([[left_content, right_content]], colWidths=[326, 479])
+    panels.setStyle(TableStyle(_panel_style))
+    return panels
+
+
 def build_pdf_chart_flowable(
     image_bytes: Optional[bytes],
     width: int,
@@ -1799,7 +1917,7 @@ def build_pdf_header_panel(
     meta_style.textColor = colors.white
 
     content = [
-        Paragraph("Tanita BC-601 · Informe clínico de composición corporal", title_style),
+        Paragraph("Informe clínico de composición corporal", title_style),
         Spacer(1, 2),
         Paragraph(
             "Resumen ejecutivo en una sola página para revisión rápida, impresión y seguimiento longitudinal.",
@@ -1808,7 +1926,6 @@ def build_pdf_header_panel(
         Spacer(1, 5),
         Paragraph(
             (
-                f"Archivo: <b>{Path(source_name).name}</b> · "
                 f"Periodo: <b>{first_measurement:%d/%m/%Y}</b> - <b>{last_measurement:%d/%m/%Y}</b> · "
                 f"Registros: <b>{len(dataframe)}</b>"
             ),
@@ -1916,99 +2033,47 @@ def build_pdf_bytes(
     first_measurement = dataframe["Fecha medición"].min()
     last_measurement = dataframe["Fecha medición"].max()
 
-    weight_chart = None
-    if metric_columns.get("weight"):
-        weight_chart = build_pdf_line_chart_image(
-            dataframe,
-            metric_columns["weight"],
-            "Peso corporal · evolución longitudinal",
-            SOFT_COLORS["weight"],
-        )
-    trend_index_chart = build_pdf_indexed_trend_chart_image(
-        dataframe,
-        metric_columns,
-        ["weight", "body_fat_pct", "muscle_mass", "total_body_water_pct"],
-        "Tendencia relativa de métricas clave",
-    )
-    segment_chart_df, _, segment_title = build_segmental_chart_data(
-        dataframe,
-        segment_family,
-        segment_columns,
-    )
-    segment_chart = build_pdf_segment_chart_image(segment_chart_df, segment_title)
-    delta_chart = build_pdf_delta_chart_image(
-        dataframe,
-        metric_columns,
-        ["weight", "body_fat_pct", "muscle_mass", "metabolic_age"],
-        "Cambios respecto al inicio",
-    )
-    main_chart = weight_chart or trend_index_chart or segment_chart or delta_chart
-    secondary_right_chart = segment_chart or delta_chart
     header_panel = build_pdf_header_panel(source_name, first_measurement, last_measurement, dataframe, styles)
     kpi_strip = build_pdf_kpi_strip(latest_row, metric_columns, styles)
+
+    summary_panels = build_pdf_summary_panels(dataframe, latest_row, metric_columns, styles)
 
     story = [header_panel, Spacer(1, 9)]
     if kpi_strip is not None:
         story.extend([kpi_strip, Spacer(1, 9)])
+    story.extend([summary_panels, Spacer(1, 10)])
 
-    overview_row = Table(
-        [[
-            build_pdf_chart_flowable(
-                main_chart,
-                width=536,
-                height=192,
-                styles=styles,
-                fallback_text="No se pudo generar la gráfica principal para el PDF.",
-            ),
-            build_pdf_comment_box(latest_row, dataframe, metric_columns, styles),
-        ]],
-        colWidths=[548, 246],
-    )
-    overview_row.setStyle(
-        TableStyle(
-            [
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 0),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
-                ("TOPPADDING", (0, 0), (-1, -1), 0),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
-            ]
-        )
-    )
+    # Individual chart per metric, 2-column grid
+    _chart_keys = [k for k in PRIMARY_KPI_KEYS + SECONDARY_KPI_KEYS if metric_columns.get(k)]
+    _CW, _CH = 394, 158  # chart width / height in points
 
-    story.extend([overview_row, Spacer(1, 10)])
-
-    bottom_row = Table(
-        [[
-            build_pdf_chart_flowable(
-                trend_index_chart,
-                width=392,
-                height=154,
-                styles=styles,
-                fallback_text="No se pudo generar la gráfica de tendencia relativa.",
-            ),
-            build_pdf_chart_flowable(
-                secondary_right_chart,
-                width=392,
-                height=154,
-                styles=styles,
-                fallback_text="No se pudo generar la gráfica comparativa final.",
-            ),
-        ]],
-        colWidths=[398, 398],
-    )
-    bottom_row.setStyle(
-        TableStyle(
-            [
-                ("VALIGN", (0, 0), (-1, -1), "TOP"),
-                ("LEFTPADDING", (0, 0), (-1, -1), 0),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 6),
-                ("TOPPADDING", (0, 0), (-1, -1), 0),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
-            ]
-        )
-    )
-    story.append(bottom_row)
+    for _i in range(0, len(_chart_keys), 2):
+        _pair = _chart_keys[_i:_i + 2]
+        _cells = []
+        for _key in _pair:
+            _img = build_pdf_line_chart_image(
+                dataframe,
+                metric_columns[_key],
+                METRIC_CONFIG[_key]["label"],
+                SOFT_COLORS[_key],
+            )
+            _cells.append(
+                RLImage(io.BytesIO(_img), width=_CW, height=_CH) if _img
+                else Paragraph(f"Sin datos: {METRIC_CONFIG[_key]['label']}", styles["BodyText"])
+            )
+        if len(_cells) == 1:
+            _cells.append("")
+        _row = Table([_cells], colWidths=[_CW + 9, _CW + 4])
+        _row.setStyle(TableStyle([
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("LEFTPADDING", (0, 0), (-1, -1), 0),
+            ("RIGHTPADDING", (0, 0), (0, -1), 9),
+            ("RIGHTPADDING", (1, 0), (1, -1), 0),
+            ("TOPPADDING", (0, 0), (-1, -1), 0),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ]))
+        story.append(_row)
+        story.append(Spacer(1, 7))
 
     document.build(story)
     buffer.seek(0)
@@ -2056,7 +2121,9 @@ def render_metabolic_chart(dataframe: pd.DataFrame, metric_columns: Dict[str, Op
     )
 
 
-def render_segmental_chart(dataframe: pd.DataFrame, family: Optional[str], segment_columns: Dict[Tuple[str, str], str]) -> None:
+def render_segmental_chart(
+    dataframe: pd.DataFrame, family: Optional[str], segment_columns: Dict[Tuple[str, str], str]
+) -> None:
     chart_df, radar_rows, title = build_segmental_chart_data(dataframe, family, segment_columns)
     if chart_df is None:
         st.info("El archivo no incluye datos segmentales comparables de brazos o piernas.")
@@ -2118,8 +2185,10 @@ _TANITA_TABLE_CSS = """
 
 def get_body_fat_table_html(gender: str, age: int, fat_pct: Optional[float]) -> str:
     is_female = gender.lower() in ["femenino", "female", "mujer", "f"]
-    
-    def get_row_data(row_is_female, age_min, age_max, under_lim, healthy_min, healthy_max, over_min, over_max, obese_min):
+
+    def get_row_data(
+        row_is_female, age_min, age_max, under_lim, healthy_min, healthy_max, over_min, over_max, obese_min
+    ):
         row_is_active = (is_female == row_is_female) and (age_min <= age <= age_max)
         user_col = -1
         if row_is_active and fat_pct is not None:
@@ -2139,7 +2208,7 @@ def get_body_fat_table_html(gender: str, age: int, fat_pct: Optional[float]) -> 
             "over": f"{over_min}% - {over_max}%",
             "obese": f"&gt;={obese_min}%",
             "active": row_is_active,
-            "user_col": user_col
+            "user_col": user_col,
         }
 
     rows_data = [
@@ -2150,7 +2219,7 @@ def get_body_fat_table_html(gender: str, age: int, fat_pct: Optional[float]) -> 
         get_row_data(False, 40, 59, 11, 11, 22, 22, 28, 28),
         get_row_data(False, 60, 99, 13, 13, 25, 25, 30, 30),
     ]
-    
+
     html = """
     <table class="tanita-ref-table">
         <thead>
@@ -2182,23 +2251,29 @@ def get_body_fat_table_html(gender: str, age: int, fat_pct: Optional[float]) -> 
 
 def get_body_water_table_html(gender: str, water_pct: Optional[float]) -> str:
     is_female = gender.lower() in ["femenino", "female", "mujer", "f"]
-    
+
     f_active = is_female
     f_highlight = f_active and water_pct is not None and 45.0 <= water_pct <= 60.0
     f_user_col = -1
     if f_active and water_pct is not None:
-        if water_pct < 45.0: f_user_col = 0
-        elif water_pct <= 60.0: f_user_col = 1
-        else: f_user_col = 2
-        
+        if water_pct < 45.0:
+            f_user_col = 0
+        elif water_pct <= 60.0:
+            f_user_col = 1
+        else:
+            f_user_col = 2
+
     m_active = not is_female
     m_highlight = m_active and water_pct is not None and 50.0 <= water_pct <= 65.0
     m_user_col = -1
     if m_active and water_pct is not None:
-        if water_pct < 50.0: m_user_col = 0
-        elif water_pct <= 65.0: m_user_col = 1
-        else: m_user_col = 2
-        
+        if water_pct < 50.0:
+            m_user_col = 0
+        elif water_pct <= 65.0:
+            m_user_col = 1
+        else:
+            m_user_col = 2
+
     html = """
     <table class="tanita-ref-table">
         <thead>
@@ -2216,13 +2291,13 @@ def get_body_water_table_html(gender: str, water_pct: Optional[float]) -> str:
     html += f"<td{' class=\"ref-highlight-cell\"' if f_user_col==0 else ''}>&lt; 45%</td>"
     html += f"<td{' class=\"ref-highlight-cell\"' if f_user_col==1 else ''}>45% - 60%</td>"
     html += f"<td{' class=\"ref-highlight-cell\"' if f_user_col==2 else ''}>&gt; 60%</td></tr>"
-    
+
     m_row_class = " class='ref-highlight-row'" if m_active else ""
     html += f"<tr{m_row_class}><td>Masculino</td>"
     html += f"<td{' class=\"ref-highlight-cell\"' if m_user_col==0 else ''}>&lt; 50%</td>"
     html += f"<td{' class=\"ref-highlight-cell\"' if m_user_col==1 else ''}>50% - 65%</td>"
     html += f"<td{' class=\"ref-highlight-cell\"' if m_user_col==2 else ''}>&gt; 65%</td></tr>"
-    
+
     html += "</tbody></table>"
     return html
 
@@ -2234,7 +2309,7 @@ def get_visceral_fat_table_html(visceral_fat: Optional[float]) -> str:
             user_col = 0
         else:
             user_col = 1
-            
+
     html = f"""
     <table class="tanita-ref-table">
         <thead>
@@ -2263,17 +2338,17 @@ def get_visceral_fat_table_html(visceral_fat: Optional[float]) -> str:
 
 def get_physique_table_html(physique_rating: Optional[float]) -> str:
     ratings = [
-        (1, "Físico oculto", "Versteckt fettleibig / Hidden obese"),
-        (2, "Obeso", "Fettleibig / Obese"),
-        (3, "Robusto / Sólido", "Solide gebaut / Solidly-built"),
-        (4, "Bajo en ejercicio", "Untertrainiert / Under exercised"),
-        (5, "Estándar / Normal", "Normal / Standard"),
-        (6, "Estándar Musculoso", "Normal muskulös / Standard Muscular"),
-        (7, "Delgado", "Dünn / Thin"),
-        (8, "Delgado y musculoso", "Dünn und muskulös / Thin & muscular"),
-        (9, "Muy musculoso", "Sehr muskulös / Very Muscular")
+        (1, "Físico oculto", "Hidden obese"),
+        (2, "Obeso", "Obese"),
+        (3, "Robusto / Sólido", "Solidly-built"),
+        (4, "Bajo en ejercicio", "Under exercised"),
+        (5, "Estándar / Normal", "Standard"),
+        (6, "Estándar Musculoso", "Standard Muscular"),
+        (7, "Delgado", "Thin"),
+        (8, "Delgado y musculoso", "Thin & muscular"),
+        (9, "Muy musculoso", "Very Muscular"),
     ]
-    
+
     html = """
     <table class="tanita-ref-table compact-table">
         <thead>
@@ -2300,9 +2375,9 @@ def get_physique_table_html(physique_rating: Optional[float]) -> str:
 
 def get_bone_mass_table_html(gender: str, weight: Optional[float], bone_mass: Optional[float]) -> str:
     is_female = gender.lower() in ["femenino", "female", "mujer", "f"]
-    
+
     def get_row_data(row_is_female, w_min, w_max, expected_val):
-        row_is_active = (is_female == row_is_female)
+        row_is_active = is_female == row_is_female
         if row_is_active and weight is not None:
             if w_min is None:
                 row_is_active = weight < w_max
@@ -2312,18 +2387,20 @@ def get_bone_mass_table_html(gender: str, weight: Optional[float], bone_mass: Op
                 row_is_active = w_min <= weight < w_max
         else:
             row_is_active = False
-            
+
         user_match = row_is_active and bone_mass is not None
-        
-        w_label = f"&lt; {w_max} kg" if w_min is None else (f"&gt;= {w_min} kg" if w_max is None else f"{w_min} - {w_max} kg")
+
+        w_label = (
+            f"&lt; {w_max} kg" if w_min is None else (f"&gt;= {w_min} kg" if w_max is None else f"{w_min} - {w_max} kg")
+        )
         return {
             "gender": "Femenino" if row_is_female else "Masculino",
             "weight_class": w_label,
             "expected": f"{expected_val:.2f} kg",
             "active": row_is_active,
-            "user_match": user_match
+            "user_match": user_match,
         }
-        
+
     rows_data = [
         get_row_data(True, None, 50, 1.95),
         get_row_data(True, 50, 75, 2.40),
@@ -2332,7 +2409,7 @@ def get_bone_mass_table_html(gender: str, weight: Optional[float], bone_mass: Op
         get_row_data(False, 65, 95, 3.29),
         get_row_data(False, 95, None, 3.69),
     ]
-    
+
     html = """
     <table class="tanita-ref-table">
         <thead>
@@ -2371,7 +2448,7 @@ def generate_tanita_tracker_table_html(dataframe: pd.DataFrame, metric_columns: 
         dt = row["Fecha medición"]
         date_str = dt.strftime("%d/%m") if not pd.isna(dt) else ""
         time_str = dt.strftime("%H:%M") if not pd.isna(dt) else ""
-        
+
         def get_val(key, decimals=1):
             col = metric_columns.get(key)
             if col and col in row and not pd.isna(row[col]):
@@ -2390,32 +2467,36 @@ def generate_tanita_tracker_table_html(dataframe: pd.DataFrame, metric_columns: 
         dci = get_val("daily_calorie_intake", 0)
         bmr_dci = f"{bmr} / {dci}" if (bmr or dci) else ""
 
-        cols_data.append({
-            "date": date_str,
-            "time": time_str,
-            "weight": weight,
-            "fat": fat,
-            "water": water,
-            "visceral": visceral,
-            "muscle": muscle,
-            "physique": physique,
-            "bone": bone,
-            "bmr_dci": bmr_dci
-        })
-    
+        cols_data.append(
+            {
+                "date": date_str,
+                "time": time_str,
+                "weight": weight,
+                "fat": fat,
+                "water": water,
+                "visceral": visceral,
+                "muscle": muscle,
+                "physique": physique,
+                "bone": bone,
+                "bmr_dci": bmr_dci,
+            }
+        )
+
     for _ in range(num_padding):
-        cols_data.append({
-            "date": "&nbsp;&nbsp;/&nbsp;&nbsp;",
-            "time": "&nbsp;&nbsp;:&nbsp;&nbsp;",
-            "weight": "",
-            "fat": "",
-            "water": "",
-            "visceral": "",
-            "muscle": "",
-            "physique": "",
-            "bone": "",
-            "bmr_dci": ""
-        })
+        cols_data.append(
+            {
+                "date": "&nbsp;&nbsp;/&nbsp;&nbsp;",
+                "time": "&nbsp;&nbsp;:&nbsp;&nbsp;",
+                "weight": "",
+                "fat": "",
+                "water": "",
+                "visceral": "",
+                "muscle": "",
+                "physique": "",
+                "bone": "",
+                "bmr_dci": "",
+            }
+        )
 
     html = """
     <table class="tanita-tracker-table">
@@ -2423,8 +2504,7 @@ def generate_tanita_tracker_table_html(dataframe: pd.DataFrame, metric_columns: 
             <tr>
                 <th class="metric-label-cell">
                     <div class="lang-en">Date / Time</div>
-                    <div class="lang-de">Datum / Uhrzeit</div>
-                    <div class="lang-fr">Date / Heure</div>
+                    <div class="lang-de">Fecha / Hora</div>
                 </th>
     """
     for col in cols_data:
@@ -2439,15 +2519,14 @@ def generate_tanita_tracker_table_html(dataframe: pd.DataFrame, metric_columns: 
         </thead>
         <tbody>
     """
-    
+
     # Rows
     # 1. Body Fat %
     html += """
             <tr>
                 <td class="metric-label-cell">
                     <div class="lang-en">Body Fat %</div>
-                    <div class="lang-de">Körperfett %</div>
-                    <div class="lang-fr">Taux de Graisse</div>
+                    <div class="lang-de">% Grasa Corporal</div>
                 </td>
     """
     for col in cols_data:
@@ -2459,8 +2538,7 @@ def generate_tanita_tracker_table_html(dataframe: pd.DataFrame, metric_columns: 
             <tr>
                 <td class="metric-label-cell">
                     <div class="lang-en">Weight (kg)</div>
-                    <div class="lang-de">Gewicht (kg)</div>
-                    <div class="lang-fr">Poids (kg)</div>
+                    <div class="lang-de">Peso (kg)</div>
                 </td>
     """
     for col in cols_data:
@@ -2472,8 +2550,7 @@ def generate_tanita_tracker_table_html(dataframe: pd.DataFrame, metric_columns: 
             <tr>
                 <td class="metric-label-cell">
                     <div class="lang-en">Body Water %</div>
-                    <div class="lang-de">Körperwasser %</div>
-                    <div class="lang-fr">Taux d'Eau</div>
+                    <div class="lang-de">% Agua Corporal</div>
                 </td>
     """
     for col in cols_data:
@@ -2485,8 +2562,7 @@ def generate_tanita_tracker_table_html(dataframe: pd.DataFrame, metric_columns: 
             <tr>
                 <td class="metric-label-cell">
                     <div class="lang-en">Visceral Fat</div>
-                    <div class="lang-de">Viszeralfett</div>
-                    <div class="lang-fr">Graisse Viscérale</div>
+                    <div class="lang-de">Grasa Visceral</div>
                 </td>
     """
     for col in cols_data:
@@ -2498,8 +2574,7 @@ def generate_tanita_tracker_table_html(dataframe: pd.DataFrame, metric_columns: 
             <tr>
                 <td class="metric-label-cell">
                     <div class="lang-en">Muscle Mass (kg)</div>
-                    <div class="lang-de">Muskelmasse (kg)</div>
-                    <div class="lang-fr">Masse Musculaire</div>
+                    <div class="lang-de">Masa Muscular (kg)</div>
                 </td>
     """
     for col in cols_data:
@@ -2511,8 +2586,7 @@ def generate_tanita_tracker_table_html(dataframe: pd.DataFrame, metric_columns: 
             <tr>
                 <td class="metric-label-cell">
                     <div class="lang-en">Physique Rating</div>
-                    <div class="lang-de">Körperbauwert</div>
-                    <div class="lang-fr">Silhouette</div>
+                    <div class="lang-de">Clasificación Física</div>
                 </td>
     """
     for col in cols_data:
@@ -2524,8 +2598,7 @@ def generate_tanita_tracker_table_html(dataframe: pd.DataFrame, metric_columns: 
             <tr>
                 <td class="metric-label-cell">
                     <div class="lang-en">Bone Mass (kg)</div>
-                    <div class="lang-de">Knochenmasse (kg)</div>
-                    <div class="lang-fr">Masse Osseuse</div>
+                    <div class="lang-de">Masa Ósea (kg)</div>
                 </td>
     """
     for col in cols_data:
@@ -2537,8 +2610,7 @@ def generate_tanita_tracker_table_html(dataframe: pd.DataFrame, metric_columns: 
             <tr>
                 <td class="metric-label-cell">
                     <div class="lang-en">BMR / DCI (kcal)</div>
-                    <div class="lang-de">Grundumsatz / DCI</div>
-                    <div class="lang-fr">BMR / Apport Cal.</div>
+                    <div class="lang-de">Metabolismo Basal / Ingesta Cal.</div>
                 </td>
     """
     for col in cols_data:
@@ -2554,42 +2626,40 @@ def generate_tanita_tracker_table_html(dataframe: pd.DataFrame, metric_columns: 
 
 # --- PDF Generation helper functions for Tanita Official Form ---
 
+
 def make_pdf_body_fat_table(gender, age, fat_pct, styles):
     is_female = gender.lower() in ["femenino", "female", "mujer", "f"]
     header_style = ParagraphStyle(
-        'HeaderStyleBFT',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=6.5,
-        leading=8,
+        "HeaderStyleBFT",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=4,
+        leading=5,
         textColor=colors.HexColor("#355879"),
-        alignment=1
+        alignment=1,
     )
     label_style = ParagraphStyle(
-        'LabelStyleBFT',
-        parent=styles['Normal'],
-        fontName='Helvetica',
-        fontSize=6,
-        leading=7.5,
+        "LabelStyleBFT",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=3.5,
+        leading=4.5,
         textColor=colors.HexColor("#16324f"),
-        alignment=1
+        alignment=1,
     )
     val_style = ParagraphStyle(
-        'ValStyleBFT',
-        parent=styles['Normal'],
-        fontName='Helvetica',
-        fontSize=5.5,
-        leading=7,
+        "ValStyleBFT",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=3.5,
+        leading=4.5,
         textColor=colors.HexColor("#16324f"),
-        alignment=1
+        alignment=1,
     )
     val_style_white = ParagraphStyle(
-        'ValStyleBFTWhite',
-        parent=val_style,
-        fontName='Helvetica-Bold',
-        textColor=colors.white
+        "ValStyleBFTWhite", parent=val_style, fontName="Helvetica-Bold", textColor=colors.white
     )
-    
+
     data = [
         [
             Paragraph("<b>Género</b>", header_style),
@@ -2597,7 +2667,7 @@ def make_pdf_body_fat_table(gender, age, fat_pct, styles):
             Paragraph("<b>Bajo (-)</b>", header_style),
             Paragraph("<b>Sano (0)</b>", header_style),
             Paragraph("<b>Alto (+)</b>", header_style),
-            Paragraph("<b>Obeso (++)</b>", header_style)
+            Paragraph("<b>Obeso (++)</b>", header_style),
         ]
     ]
     rows_def = [
@@ -2606,17 +2676,19 @@ def make_pdf_body_fat_table(gender, age, fat_pct, styles):
         (True, 60, 99, 24, 24, 36, 36, 42, 42),
         (False, 18, 39, 8, 8, 20, 20, 25, 25),
         (False, 40, 59, 11, 11, 22, 22, 28, 28),
-        (False, 60, 99, 13, 13, 25, 25, 30, 30)
+        (False, 60, 99, 13, 13, 25, 25, 30, 30),
     ]
     t_style = [
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#d3dfeb")),
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#f0f6fc")),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 3),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d3dfeb")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f0f6fc")),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
     ]
-    for row_idx, (r_female, a_min, a_max, under_lim, h_min, h_max, o_min, o_max, ob_min) in enumerate(rows_def, start=1):
+    for row_idx, (r_female, a_min, a_max, under_lim, h_min, h_max, o_min, o_max, ob_min) in enumerate(
+        rows_def, start=1
+    ):
         g_label = "Fem" if r_female else "Masc"
         a_label = f"{a_min}-{a_max}"
         under_val = f"<{under_lim}%"
@@ -2635,192 +2707,185 @@ def make_pdf_body_fat_table(gender, age, fat_pct, styles):
             else:
                 user_col = 5
         if row_active:
-            t_style.append(('BACKGROUND', (0, row_idx), (-1, row_idx), colors.HexColor("#f0f7ff")))
+            t_style.append(("BACKGROUND", (0, row_idx), (-1, row_idx), colors.HexColor("#f0f7ff")))
         if user_col != -1:
-            t_style.append(('BACKGROUND', (user_col, row_idx), (user_col, row_idx), colors.HexColor("#2e77b7")))
+            t_style.append(("BACKGROUND", (user_col, row_idx), (user_col, row_idx), colors.HexColor("#2e77b7")))
+
         def get_cell_para(text, col_idx):
             style = val_style_white if (user_col == col_idx) else label_style if col_idx < 2 else val_style
             return Paragraph(text, style)
-        data.append([
-            get_cell_para(g_label, 0),
-            get_cell_para(a_label, 1),
-            get_cell_para(under_val, 2),
-            get_cell_para(healthy_val, 3),
-            get_cell_para(over_val, 4),
-            get_cell_para(obese_val, 5)
-        ])
-    t = Table(data, colWidths=[28, 32, 42, 48, 48, 42])
+
+        data.append(
+            [
+                get_cell_para(g_label, 0),
+                get_cell_para(a_label, 1),
+                get_cell_para(under_val, 2),
+                get_cell_para(healthy_val, 3),
+                get_cell_para(over_val, 4),
+                get_cell_para(obese_val, 5),
+            ]
+        )
+    t = Table(data, colWidths=[24, 28, 40, 47, 47, 46])
     t.setStyle(TableStyle(t_style))
     return t
+
 
 def make_pdf_water_visceral_stack(gender, water_pct, visceral_fat, styles):
     is_female = gender.lower() in ["femenino", "female", "mujer", "f"]
     header_style = ParagraphStyle(
-        'HeaderStyleWVT',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=6.5,
-        leading=8,
+        "HeaderStyleWVT",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=4,
+        leading=5,
         textColor=colors.HexColor("#355879"),
-        alignment=1
+        alignment=1,
     )
     label_style = ParagraphStyle(
-        'LabelStyleWVT',
-        parent=styles['Normal'],
-        fontName='Helvetica',
-        fontSize=6,
-        leading=7.5,
+        "LabelStyleWVT",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=3.5,
+        leading=4.5,
         textColor=colors.HexColor("#16324f"),
-        alignment=1
+        alignment=1,
     )
     val_style = ParagraphStyle(
-        'ValStyleWVT',
-        parent=styles['Normal'],
-        fontName='Helvetica',
-        fontSize=5.5,
-        leading=7.5,
+        "ValStyleWVT",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=3.5,
+        leading=4.5,
         textColor=colors.HexColor("#16324f"),
-        alignment=1
+        alignment=1,
     )
     val_style_white = ParagraphStyle(
-        'ValStyleWVTWhite',
-        parent=val_style,
-        fontName='Helvetica-Bold',
-        textColor=colors.white
+        "ValStyleWVTWhite", parent=val_style, fontName="Helvetica-Bold", textColor=colors.white
     )
-    
-    water_data = [
-        [
-            Paragraph("<b>Género</b>", header_style),
-            Paragraph("<b>Agua Recomendada</b>", header_style)
-        ]
-    ]
+
+    water_data = [[Paragraph("<b>Género</b>", header_style), Paragraph("<b>Agua Recomendada</b>", header_style)]]
     w_t_style = [
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#d3dfeb")),
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#f0f6fc")),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 3),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d3dfeb")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f0f6fc")),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
     ]
     f_active = is_female
     f_highlight = f_active and water_pct is not None and 45.0 <= water_pct <= 60.0
     if f_active:
-        w_t_style.append(('BACKGROUND', (0, 1), (-1, 1), colors.HexColor("#f0f7ff")))
+        w_t_style.append(("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#f0f7ff")))
     if f_highlight:
-        w_t_style.append(('BACKGROUND', (1, 1), (1, 1), colors.HexColor("#2e77b7")))
-    water_data.append([
-        Paragraph("Fem (♀)", label_style),
-        Paragraph("45% - 60%", val_style_white if f_highlight else val_style)
-    ])
-    
+        w_t_style.append(("BACKGROUND", (1, 1), (1, 1), colors.HexColor("#2e77b7")))
+    water_data.append(
+        [Paragraph("Fem (♀)", label_style), Paragraph("45% - 60%", val_style_white if f_highlight else val_style)]
+    )
+
     m_active = not is_female
     m_highlight = m_active and water_pct is not None and 50.0 <= water_pct <= 65.0
     if m_active:
-        w_t_style.append(('BACKGROUND', (0, 2), (-1, 2), colors.HexColor("#f0f7ff")))
+        w_t_style.append(("BACKGROUND", (0, 2), (-1, 2), colors.HexColor("#f0f7ff")))
     if m_highlight:
-        w_t_style.append(('BACKGROUND', (1, 2), (1, 2), colors.HexColor("#2e77b7")))
-    water_data.append([
-        Paragraph("Masc (♂)", label_style),
-        Paragraph("50% - 65%", val_style_white if m_highlight else val_style)
-    ])
-    water_table = Table(water_data, colWidths=[55, 95])
+        w_t_style.append(("BACKGROUND", (1, 2), (1, 2), colors.HexColor("#2e77b7")))
+    water_data.append(
+        [Paragraph("Masc (♂)", label_style), Paragraph("50% - 65%", val_style_white if m_highlight else val_style)]
+    )
+    water_table = Table(water_data, colWidths=[55, 89])
     water_table.setStyle(TableStyle(w_t_style))
-    
-    visc_data = [
-        [
-            Paragraph("<b>Nivel</b>", header_style),
-            Paragraph("<b>Clasificación</b>", header_style)
-        ]
-    ]
+
+    visc_data = [[Paragraph("<b>Nivel</b>", header_style), Paragraph("<b>Clasificación</b>", header_style)]]
     v_t_style = [
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#d3dfeb")),
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#f0f6fc")),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 3),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d3dfeb")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f0f6fc")),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
     ]
     v_healthy_active = visceral_fat is not None and visceral_fat <= 12
     v_excess_active = visceral_fat is not None and visceral_fat > 12
     if v_healthy_active:
-        v_t_style.append(('BACKGROUND', (0, 1), (-1, 1), colors.HexColor("#2e77b7")))
+        v_t_style.append(("BACKGROUND", (0, 1), (-1, 1), colors.HexColor("#2e77b7")))
     if v_excess_active:
-        v_t_style.append(('BACKGROUND', (0, 2), (-1, 2), colors.HexColor("#d9534f")))
-    visc_data.append([
-        Paragraph("1 - 12", val_style_white if v_healthy_active else val_style),
-        Paragraph("Saludable", val_style_white if v_healthy_active else val_style)
-    ])
-    visc_data.append([
-        Paragraph("13 - 59", val_style_white if v_excess_active else val_style),
-        Paragraph("Exceso", val_style_white if v_excess_active else val_style)
-    ])
-    visc_table = Table(visc_data, colWidths=[55, 95])
+        v_t_style.append(("BACKGROUND", (0, 2), (-1, 2), colors.HexColor("#d9534f")))
+    visc_data.append(
+        [
+            Paragraph("1 - 12", val_style_white if v_healthy_active else val_style),
+            Paragraph("Saludable", val_style_white if v_healthy_active else val_style),
+        ]
+    )
+    visc_data.append(
+        [
+            Paragraph("13 - 59", val_style_white if v_excess_active else val_style),
+            Paragraph("Exceso", val_style_white if v_excess_active else val_style),
+        ]
+    )
+    visc_table = Table(visc_data, colWidths=[55, 89])
     visc_table.setStyle(TableStyle(v_t_style))
-    
+
     water_visc_data = [
         [Paragraph("<b>Agua corporal</b>", header_style)],
         [water_table],
         [Spacer(1, 4)],
         [Paragraph("<b>Grasa visceral</b>", header_style)],
-        [visc_table]
+        [visc_table],
     ]
-    water_visc_nested_table = Table(water_visc_data, colWidths=[150])
-    water_visc_nested_table.setStyle(TableStyle([
-        ('VALIGN', (0,0), (-1,-1), 'TOP'),
-        ('LEFTPADDING', (0,0), (-1,-1), 0),
-        ('RIGHTPADDING', (0,0), (-1,-1), 0),
-        ('TOPPADDING', (0,0), (-1,-1), 0),
-        ('BOTTOMPADDING', (0,0), (-1,-1), 0),
-    ]))
+    water_visc_nested_table = Table(water_visc_data, colWidths=[144])
+    water_visc_nested_table.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+            ]
+        )
+    )
     return water_visc_nested_table
+
 
 def make_pdf_physique_table(physique_rating, styles):
     header_style = ParagraphStyle(
-        'HeaderStylePT',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=6.5,
-        leading=8,
+        "HeaderStylePT",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=4,
+        leading=5,
         textColor=colors.HexColor("#355879"),
-        alignment=1
+        alignment=1,
     )
     label_style = ParagraphStyle(
-        'LabelStylePT',
-        parent=styles['Normal'],
-        fontName='Helvetica',
-        fontSize=5.5,
-        leading=7,
+        "LabelStylePT",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=3.5,
+        leading=4.5,
         textColor=colors.HexColor("#16324f"),
-        alignment=0
+        alignment=0,
     )
     val_style = ParagraphStyle(
-        'ValStylePT',
-        parent=styles['Normal'],
-        fontName='Helvetica',
-        fontSize=5.5,
-        leading=7,
+        "ValStylePT",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=3.5,
+        leading=4.5,
         textColor=colors.HexColor("#16324f"),
-        alignment=1
+        alignment=1,
     )
     val_style_white = ParagraphStyle(
-        'ValStylePTWhite',
-        parent=val_style,
-        fontName='Helvetica-Bold',
-        textColor=colors.white
+        "ValStylePTWhite", parent=val_style, fontName="Helvetica-Bold", textColor=colors.white
     )
     label_style_white = ParagraphStyle(
-        'LabelStylePTWhite',
-        parent=label_style,
-        fontName='Helvetica-Bold',
-        textColor=colors.white
+        "LabelStylePTWhite", parent=label_style, fontName="Helvetica-Bold", textColor=colors.white
     )
-    
+
     data = [
         [
             Paragraph("<b>Val</b>", header_style),
             Paragraph("<b>Clasificación</b>", header_style),
-            Paragraph("<b>Equivalencia</b>", header_style)
+            Paragraph("<b>Equivalencia</b>", header_style),
         ]
     ]
     ratings = [
@@ -2832,76 +2897,72 @@ def make_pdf_physique_table(physique_rating, styles):
         (6, "Estándar Musculoso", "Standard Muscular"),
         (7, "Delgado", "Thin"),
         (8, "Delgado y musculoso", "Thin & muscular"),
-        (9, "Muy musculoso", "Very Muscular")
+        (9, "Muy musculoso", "Very Muscular"),
     ]
     t_style = [
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#d3dfeb")),
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#f0f6fc")),
-        ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 1.5),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 1.5),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d3dfeb")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f0f6fc")),
+        ("ALIGN", (0, 0), (-1, -1), "LEFT"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 1),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 1),
     ]
     for val, name, desc in ratings:
         is_user = physique_rating is not None and int(round(physique_rating)) == val
         row_idx = val
         if is_user:
-            t_style.append(('BACKGROUND', (0, row_idx), (-1, row_idx), colors.HexColor("#2e77b7")))
+            t_style.append(("BACKGROUND", (0, row_idx), (-1, row_idx), colors.HexColor("#2e77b7")))
+
         def get_cell_para(text, is_label=False):
             if is_user:
                 return Paragraph(text, label_style_white if is_label else val_style_white)
             else:
                 return Paragraph(text, label_style if is_label else val_style)
-        data.append([
-            get_cell_para(str(val), False),
-            get_cell_para(name, True),
-            get_cell_para(desc, True)
-        ])
-    t = Table(data, colWidths=[18, 92, 90])
+
+        data.append([get_cell_para(str(val), False), get_cell_para(name, True), get_cell_para(desc, True)])
+    t = Table(data, colWidths=[17, 92, 95])
     t.setStyle(TableStyle(t_style))
     return t
+
 
 def make_pdf_bone_table(gender, weight, bone_mass, styles):
     is_female = gender.lower() in ["femenino", "female", "mujer", "f"]
     header_style = ParagraphStyle(
-        'HeaderStyleBT',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
-        fontSize=6.5,
-        leading=8,
+        "HeaderStyleBT",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=4,
+        leading=5,
         textColor=colors.HexColor("#355879"),
-        alignment=1
+        alignment=1,
     )
     label_style = ParagraphStyle(
-        'LabelStyleBT',
-        parent=styles['Normal'],
-        fontName='Helvetica',
-        fontSize=6,
-        leading=7.5,
+        "LabelStyleBT",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=3.5,
+        leading=4.5,
         textColor=colors.HexColor("#16324f"),
-        alignment=1
+        alignment=1,
     )
     val_style = ParagraphStyle(
-        'ValStyleBT',
-        parent=styles['Normal'],
-        fontName='Helvetica',
-        fontSize=5.5,
-        leading=7,
+        "ValStyleBT",
+        parent=styles["Normal"],
+        fontName="Helvetica",
+        fontSize=3.5,
+        leading=4.5,
         textColor=colors.HexColor("#16324f"),
-        alignment=1
+        alignment=1,
     )
     val_style_white = ParagraphStyle(
-        'ValStyleBTWhite',
-        parent=val_style,
-        fontName='Helvetica-Bold',
-        textColor=colors.white
+        "ValStyleBTWhite", parent=val_style, fontName="Helvetica-Bold", textColor=colors.white
     )
-    
+
     data = [
         [
             Paragraph("<b>Género</b>", header_style),
             Paragraph("<b>Peso (W)</b>", header_style),
-            Paragraph("<b>Masa Ósea</b>", header_style)
+            Paragraph("<b>Masa Ósea</b>", header_style),
         ]
     ]
     rows_def = [
@@ -2910,15 +2971,15 @@ def make_pdf_bone_table(gender, weight, bone_mass, styles):
         (True, 75, None, 2.95),
         (False, None, 65, 2.65),
         (False, 65, 95, 3.29),
-        (False, 95, None, 3.69)
+        (False, 95, None, 3.69),
     ]
     t_style = [
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#d3dfeb")),
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#f0f6fc")),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 3),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d3dfeb")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#f0f6fc")),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
     ]
     for row_idx, (r_female, w_min, w_max, expected_val) in enumerate(rows_def, start=1):
         g_label = "Fem" if r_female else "Masc"
@@ -2929,7 +2990,7 @@ def make_pdf_bone_table(gender, weight, bone_mass, styles):
         else:
             w_label = f"{w_min} - {w_max} kg"
         expected_label = f"{expected_val:.2f} kg"
-        row_active = (is_female == r_female)
+        row_active = is_female == r_female
         if row_active and weight is not None:
             if w_min is None:
                 row_active = weight < w_max
@@ -2941,22 +3002,23 @@ def make_pdf_bone_table(gender, weight, bone_mass, styles):
             row_active = False
         user_match = row_active and bone_mass is not None
         if row_active:
-            t_style.append(('BACKGROUND', (0, row_idx), (-1, row_idx), colors.HexColor("#f0f7ff")))
+            t_style.append(("BACKGROUND", (0, row_idx), (-1, row_idx), colors.HexColor("#f0f7ff")))
         if user_match:
-            t_style.append(('BACKGROUND', (2, row_idx), (2, row_idx), colors.HexColor("#2e77b7")))
+            t_style.append(("BACKGROUND", (2, row_idx), (2, row_idx), colors.HexColor("#2e77b7")))
+
         def get_cell_para(text, is_match):
             style = val_style_white if is_match else label_style
             return Paragraph(text, style)
-        data.append([
-            get_cell_para(g_label, False),
-            get_cell_para(w_label, False),
-            get_cell_para(expected_label, user_match)
-        ])
-    t = Table(data, colWidths=[35, 75, 70])
+
+        data.append(
+            [get_cell_para(g_label, False), get_cell_para(w_label, False), get_cell_para(expected_label, user_match)]
+        )
+    t = Table(data, colWidths=[32, 72, 69])
     t.setStyle(TableStyle(t_style))
     return t
 
-def make_pdf_tracking_table(dataframe, metric_columns, styles):
+
+def make_pdf_tracking_table(dataframe, metric_columns, styles, segment_family=None, segment_columns=None):
     num_cols = 12
     df_len = len(dataframe)
     if df_len <= num_cols:
@@ -2967,39 +3029,34 @@ def make_pdf_tracking_table(dataframe, metric_columns, styles):
         num_padding = 0
 
     title_style = ParagraphStyle(
-        'TrackHeaderT',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
+        "TrackHeaderT",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
         fontSize=6.5,
         leading=8,
         textColor=colors.HexColor("#16324f"),
-        alignment=0
+        alignment=0,
     )
     val_header_style = ParagraphStyle(
-        'TrackValHeaderT',
-        parent=styles['Normal'],
-        fontName='Helvetica-Bold',
+        "TrackValHeaderT",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
         fontSize=6.5,
         leading=8,
         textColor=colors.HexColor("#16324f"),
-        alignment=1
+        alignment=1,
     )
     value_style = ParagraphStyle(
-        'TrackValueT',
-        parent=styles['Normal'],
-        fontName='Helvetica',
+        "TrackValueT",
+        parent=styles["Normal"],
+        fontName="Helvetica",
         fontSize=6.5,
         leading=8,
         textColor=colors.HexColor("#16324f"),
-        alignment=1
+        alignment=1,
     )
 
-    header_p = Paragraph(
-        "<b>Date / Time</b><br/>"
-        "<font color='#5e7e9b' size='5'>Datum / Uhrzeit</font><br/>"
-        "<font color='#7b94ad' size='5'>Date / Heure</font>",
-        title_style
-    )
+    header_p = Paragraph("<b>Date / Time</b><br/>" "<font color='#5e7e9b' size='5'>Fecha / Hora</font>", title_style)
     row_headers = [header_p]
     for _, row in rows_to_show.iterrows():
         dt = row["Fecha medición"]
@@ -3012,17 +3069,28 @@ def make_pdf_tracking_table(dataframe, metric_columns, styles):
         row_headers.append(cell_p)
     table_data = [row_headers]
 
-    def add_metric_row(en, de, fr, key, decimals=1):
-        label_p = Paragraph(
-            f"<b>{en}</b><br/>"
-            f"<font color='#5e7e9b' size='5'>{de}</font><br/>"
-            f"<font color='#7b94ad' size='5'>{fr}</font>",
-            title_style
-        )
+    def add_metric_row(en, es, key, decimals=1):
+        _col = metric_columns.get(key)
+        if not _col:
+            return
+        label_p = Paragraph(f"<b>{en}</b><br/>" f"<font color='#5e7e9b' size='5'>{es}</font>", title_style)
         row = [label_p]
         for _, r in rows_to_show.iterrows():
-            col = metric_columns.get(key)
-            if col and col in r and not pd.isna(r[col]):
+            if _col in r and not pd.isna(r[_col]):
+                val = float(r[_col])
+                val_str = f"{val:.0f}" if decimals == 0 else f"{val:.{decimals}f}"
+                row.append(Paragraph(val_str, value_style))
+            else:
+                row.append(Paragraph("", value_style))
+        for _ in range(num_padding):
+            row.append(Paragraph("", value_style))
+        table_data.append(row)
+
+    def add_col_row(en, es, col, decimals=1):
+        label_p = Paragraph(f"<b>{en}</b><br/>" f"<font color='#5e7e9b' size='5'>{es}</font>", title_style)
+        row = [label_p]
+        for _, r in rows_to_show.iterrows():
+            if col in r and not pd.isna(r[col]):
                 val = float(r[col])
                 val_str = f"{val:.0f}" if decimals == 0 else f"{val:.{decimals}f}"
                 row.append(Paragraph(val_str, value_style))
@@ -3032,19 +3100,29 @@ def make_pdf_tracking_table(dataframe, metric_columns, styles):
             row.append(Paragraph("", value_style))
         table_data.append(row)
 
-    add_metric_row("Body Fat %", "Körperfett %", "Taux de Graisse", "body_fat_pct", 1)
-    add_metric_row("Weight (kg)", "Gewicht (kg)", "Poids (kg)", "weight", 1)
-    add_metric_row("Body Water %", "Körperwasser %", "Taux d'Eau", "total_body_water_pct", 1)
-    add_metric_row("Visceral Fat Rating", "Viszeralfett", "Graisse Viscérale", "visceral_fat", 0)
-    add_metric_row("Muscle Mass (kg)", "Muskelmasse (kg)", "Masse Musculaire", "muscle_mass", 1)
-    add_metric_row("Physique Rating", "Körperbauwert", "Silhouette", "physique_rating", 0)
-    add_metric_row("Bone Mass (kg)", "Knochenmasse (kg)", "Masse Osseuse", "bone_mass", 1)
+    add_metric_row("Body Fat %", "% Grasa Corporal", "body_fat_pct", 1)
+    add_metric_row("Weight (kg)", "Peso (kg)", "weight", 1)
+    add_metric_row("Body Water %", "% Agua Corporal", "total_body_water_pct", 1)
+    add_metric_row("Visceral Fat", "Grasa Visceral", "visceral_fat", 0)
+    add_metric_row("Muscle Mass (kg)", "Masa Muscular (kg)", "muscle_mass", 1)
+    add_metric_row("Physique Rating", "Clasificación Física", "physique_rating", 0)
+    add_metric_row("Bone Mass (kg)", "Masa Ósea (kg)", "bone_mass", 1)
+    add_metric_row("Metabolic Age", "Edad Metabólica", "metabolic_age", 0)
+    add_metric_row("BMI", "IMC", "bmi", 1)
+
+    if segment_family and segment_columns:
+        _fam_en = "Fat" if segment_family == "fat" else "Muscle"
+        _fam_es = "Grasa" if segment_family == "fat" else "Masa Musc"
+        _part_map = {"arm": ("Arm", "Brazo"), "leg": ("Leg", "Pierna"), "trunk": ("Trunk", "Tronco")}
+        _side_map = {"left": ("L", "Izq"), "right": ("R", "Der"), "center": ("C", "Cen")}
+        for (part, side), col in sorted(segment_columns.items()):
+            p_en, p_es = _part_map.get(part, (part.title(), part.title()))
+            s_en, s_es = _side_map.get(side, (side.title(), side.title()))
+            add_col_row(f"{_fam_en} {p_en} {s_en}", f"{_fam_es} {p_es} {s_es}", col, 1)
 
     bmr_dci_label = Paragraph(
-        "<b>BMR / DCI (kcal)</b><br/>"
-        "<font color='#5e7e9b' size='5'>Grundumsatz / DCI</font><br/>"
-        "<font color='#7b94ad' size='5'>BMR / Apport Cal.</font>",
-        title_style
+        "<b>BMR / DCI (kcal)</b><br/>" "<font color='#5e7e9b' size='5'>Metabolismo Basal / Ingesta Cal.</font>",
+        title_style,
     )
     bmr_row = [bmr_dci_label]
     for _, r in rows_to_show.iterrows():
@@ -3063,134 +3141,162 @@ def make_pdf_tracking_table(dataframe, metric_columns, styles):
     table_data.append(bmr_row)
 
     t_style = [
-        ('GRID', (0, 0), (-1, -1), 0.5, colors.HexColor("#c9d9ea")),
-        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor("#edf5fc")),
-        ('BACKGROUND', (0, 1), (0, -1), colors.HexColor("#f4f8fc")),
-        ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 2),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 2),
+        ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#c9d9ea")),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#edf5fc")),
+        ("BACKGROUND", (0, 1), (0, -1), colors.HexColor("#f4f8fc")),
+        ("ALIGN", (0, 0), (-1, -1), "CENTER"),
+        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+        ("TOPPADDING", (0, 0), (-1, -1), 2),
+        ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
     ]
     t = Table(table_data, colWidths=[140] + [55] * 12)
     t.setStyle(TableStyle(t_style))
     return t
 
-def build_official_pdf_bytes(dataframe, metric_columns, gender, age, latest_row, name, source_name) -> bytes:
+
+def build_official_pdf_bytes(
+    dataframe, metric_columns, gender, age, latest_row, name, source_name, segment_family=None, segment_columns=None
+) -> bytes:
     buffer = io.BytesIO()
     doc = SimpleDocTemplate(
-        buffer,
-        pagesize=landscape(A4),
-        leftMargin=20,
-        rightMargin=20,
-        topMargin=15,
-        bottomMargin=15
+        buffer, pagesize=landscape(A4), leftMargin=20, rightMargin=20, topMargin=15, bottomMargin=15
     )
     styles = getSampleStyleSheet()
-    
+
     title_style = ParagraphStyle(
-        'OfficialTitleMain',
-        fontName='Helvetica-Bold',
+        "OfficialTitleMain",
+        fontName="Helvetica-Bold",
         fontSize=12,
         leading=14,
         textColor=colors.HexColor("#16324f"),
-        alignment=1
+        alignment=1,
     )
     subtitle_style = ParagraphStyle(
-        'OfficialSubTitleMain',
-        fontName='Helvetica-Bold',
+        "OfficialSubTitleMain",
+        fontName="Helvetica-Bold",
         fontSize=8,
         leading=10,
         textColor=colors.HexColor("#33597c"),
-        alignment=1
+        alignment=1,
     )
     photocopy_style = ParagraphStyle(
-        'OfficialPhotocopyMain',
-        fontName='Helvetica-Oblique',
+        "OfficialPhotocopyMain",
+        fontName="Helvetica-Oblique",
         fontSize=7,
         leading=9,
         textColor=colors.HexColor("#5e7e9b"),
-        alignment=1
+        alignment=1,
     )
     ref_title_style = ParagraphStyle(
-        'RefTitleMain',
-        fontName='Helvetica-Bold',
+        "RefTitleMain",
+        fontName="Helvetica-Bold",
         fontSize=9,
         leading=11,
         textColor=colors.HexColor("#16324f"),
-        alignment=1
+        alignment=1,
     )
-    
+
     story = []
-    
+
     # Header
-    story.append(Paragraph("TANITA &middot; SET YOUR TARGETS AND TRACK YOUR PROGRESS", title_style))
-    story.append(Paragraph("STELLEN SIE IHRE ZIELE EIN UND SPÜREN SIE IHREN FORTSCHRITT AUF &nbsp;|&nbsp; ENREGISTRER VOS OBJECTIFS ET SUIVEZ VOS PROGRES", subtitle_style))
-    story.append(Paragraph("Photocopy this page to keep record of your results over a longer period &middot; Photokopieren Sie diese Seite... &middot; Photocopiez cette page...", photocopy_style))
+    story.append(
+        Paragraph(
+            "ESTABLECE TUS OBJETIVOS Y REGISTRA TU PROGRESO · SET YOUR TARGETS AND TRACK YOUR PROGRESS",
+            title_style,
+        )
+    )
     story.append(Spacer(1, 8))
-    
+
     # Metadata
     meta_style = ParagraphStyle(
-        'MetaTextMain',
-        fontName='Helvetica',
-        fontSize=7.5,
-        leading=9,
-        textColor=colors.HexColor("#16324f"),
-        alignment=1
+        "MetaTextMain", fontName="Helvetica", fontSize=7.5, leading=9, textColor=colors.HexColor("#16324f"), alignment=1
+    )
+    _gender_label = (
+        "Femenino / Female" if gender.lower() in ["femenino", "female", "mujer", "f"] else "Masculino / Male"
     )
     meta_data = [
         [
-            Paragraph(f"<b>Paciente:</b> {name}", meta_style),
-            Paragraph(f"<b>Género:</b> {'Femenino' if gender.lower() in ['femenino', 'female', 'mujer', 'f'] else 'Masculino'}", meta_style),
-            Paragraph(f"<b>Edad:</b> {age} años", meta_style),
-            Paragraph(f"<b>Archivo:</b> {source_name}", meta_style)
+            Paragraph(f"<b>Paciente / Patient:</b> {name}", meta_style),
+            Paragraph(f"<b>Género / Gender:</b> {_gender_label}", meta_style),
+            Paragraph(f"<b>Edad / Age:</b> {age} años / years", meta_style),
         ]
     ]
-    meta_table = Table(meta_data, colWidths=[200, 200, 200, 200])
-    meta_table.setStyle(TableStyle([
-        ('BACKGROUND', (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
-        ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor("#cfddeb")),
-        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
-        ('TOPPADDING', (0, 0), (-1, -1), 3),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
-    ]))
+    meta_table = Table(meta_data, colWidths=[267, 267, 266])
+    meta_table.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#f8fafc")),
+                ("BOX", (0, 0), (-1, -1), 0.5, colors.HexColor("#cfddeb")),
+                ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                ("TOPPADDING", (0, 0), (-1, -1), 3),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ]
+        )
+    )
     story.append(meta_table)
     story.append(Spacer(1, 8))
-    
+
     # Main tracking table
-    tracking_table = make_pdf_tracking_table(dataframe, metric_columns, styles)
+    tracking_table = make_pdf_tracking_table(
+        dataframe, metric_columns, styles, segment_family=segment_family, segment_columns=segment_columns
+    )
     story.append(tracking_table)
     story.append(Spacer(1, 10))
-    
+
     # Reference Section Header
     story.append(Paragraph("TABLAS DE REFERENCIA OFICIALES / OFFICIAL REFERENCE TABLES", ref_title_style))
     story.append(Spacer(1, 4))
-    
+
     # Reference Tables
     fat_pct = latest_row.get(metric_columns.get("body_fat_pct")) if "body_fat_pct" in metric_columns else None
-    water_pct = latest_row.get(metric_columns.get("total_body_water_pct")) if "total_body_water_pct" in metric_columns else None
+    water_pct = (
+        latest_row.get(metric_columns.get("total_body_water_pct")) if "total_body_water_pct" in metric_columns else None
+    )
     visceral_fat = latest_row.get(metric_columns.get("visceral_fat")) if "visceral_fat" in metric_columns else None
-    physique_rating = latest_row.get(metric_columns.get("physique_rating")) if "physique_rating" in metric_columns else None
+    physique_rating = (
+        latest_row.get(metric_columns.get("physique_rating")) if "physique_rating" in metric_columns else None
+    )
     bone_mass = latest_row.get(metric_columns.get("bone_mass")) if "bone_mass" in metric_columns else None
     weight = latest_row.get(metric_columns.get("weight")) if "weight" in metric_columns else None
-    
+
     fat_table = make_pdf_body_fat_table(gender, age, fat_pct, styles)
     water_visc_table = make_pdf_water_visceral_stack(gender, water_pct, visceral_fat, styles)
     physique_table = make_pdf_physique_table(physique_rating, styles)
     bone_table = make_pdf_bone_table(gender, weight, bone_mass, styles)
-    
-    ref_data = [
-        [fat_table, water_visc_table, physique_table, bone_table]
-    ]
-    ref_grid = Table(ref_data, colWidths=[240, 160, 210, 190])
-    ref_grid.setStyle(TableStyle([
-        ('VALIGN', (0, 0), (-1, -1), 'TOP'),
-        ('LEFTPADDING', (0, 0), (-1, -1), 0),
-        ('RIGHTPADDING', (0, 0), (-1, -1), 10),
-        ('TOPPADDING', (0, 0), (-1, -1), 0),
-        ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
-    ]))
+
+    _ref_title_style = ParagraphStyle(
+        "RefCellTitle",
+        parent=styles["Normal"],
+        fontName="Helvetica-Bold",
+        fontSize=7,
+        leading=9,
+        textColor=colors.HexColor("#16324f"),
+        alignment=0,
+    )
+
+    def _titled(title_es, title_en, table):
+        return [Paragraph(f"<b>{title_es}</b> / {title_en}", _ref_title_style), Spacer(1, 5), table]
+
+    ref_data = [[
+        _titled("% Grasa Corporal", "Body Fat %", fat_table),
+        _titled("Agua Corporal · Grasa Visceral", "Body Water % · Visceral Fat", water_visc_table),
+        _titled("Clasificación Física", "Physique Rating", physique_table),
+        _titled("Masa Ósea", "Bone Mass", bone_table),
+    ]]
+    ref_grid = Table(ref_data, colWidths=[244, 156, 216, 185])
+    ref_grid.setStyle(
+        TableStyle(
+            [
+                ("VALIGN", (0, 0), (-1, -1), "TOP"),
+                ("LEFTPADDING", (0, 0), (-1, -1), 0),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 12),
+                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+            ]
+        )
+    )
     story.append(ref_grid)
-    
+
     doc.build(story)
     buffer.seek(0)
     return buffer.getvalue()
@@ -3215,10 +3321,10 @@ if _source_mode == "folder" and _selected_folder is not None:
     source_name = _csv_path.name
     st.success(f"📂 Datos de **{_selected_folder.name}** · `{source_name}`")
 else:
-    uploaded_file = st.file_uploader("Cargar DATAX.CSV o DATA.CSV", type=["csv"])
+    uploaded_file = st.file_uploader("Cargar CSV", type=["csv"])
     if uploaded_file is None:
         st.info(
-            "Sube el archivo exportado por la báscula Tanita BC-601 para activar el dashboard. "
+            "Sube el archivo csv para activar el dashboard. "
             "El diseño está preparado para imprimir con Ctrl+P en formato clínico."
         )
         st.stop()
@@ -3250,7 +3356,7 @@ with export_col1:
     st.download_button(
         "Descargar Excel",
         data=build_excel_bytes(processed_df),
-        file_name="tanita_bc601_procesado.xlsx",
+        file_name="tanita_procesado.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
     )
@@ -3265,8 +3371,10 @@ with export_col2:
             latest_row=latest_row,
             name=user_name,
             source_name=source_name,
+            segment_family=segment_family,
+            segment_columns=segment_columns,
         ),
-        file_name=f"tanita_bc601_ficha_{user_name.lower().replace(' ', '_')}.pdf",
+        file_name=f"tanita_ficha_{user_name.lower().replace(' ', '_')}.pdf",
         mime="application/pdf",
         use_container_width=True,
     )
@@ -3281,7 +3389,7 @@ with export_col3:
             segment_columns=segment_columns,
             source_name=source_name,
         ),
-        file_name=f"tanita_bc601_graficas_{user_name.lower().replace(' ', '_')}.pdf",
+        file_name=f"tanita_graficas_{user_name.lower().replace(' ', '_')}.pdf",
         mime="application/pdf",
         use_container_width=True,
     )
@@ -3289,25 +3397,23 @@ with export_col3:
 st.write("")
 
 # Estructuración de la UI en Pestañas
-tab_ficha, tab_graficos, tab_tabla = st.tabs([
-    "📋 Ficha de Seguimiento Oficial",
-    "📊 Gráficas de Evolución",
-    "🗂️ Datos Completos"
-])
+tab_ficha, tab_graficos, tab_tabla = st.tabs(
+    ["📋 Ficha de Seguimiento Oficial", "📊 Gráficas de Evolución", "🗂️ Datos Completos"]
+)
 
 with tab_ficha:
     render_section_header(
         "Ficha de Seguimiento",
-        "Estructura oficial de la báscula Tanita BC-601 con los últimos 12 registros de seguimiento."
+        "Estructura oficial de la báscula con los últimos 12 registros de seguimiento.",
     )
     tracker_html = generate_tanita_tracker_table_html(processed_df, metric_columns)
     render_table_html(tracker_html)
-    
+
     render_section_header(
         "Rangos de Referencia Oficiales",
-        "Valores de referencia y clasificación clínica de Tanita. Tu última medición está destacada."
+        "Valores de referencia y clasificación clínica de Tanita. Tu última medición está destacada.",
     )
-    
+
     # Extraer valores de última medición de forma segura
     def get_latest_val(key):
         col = metric_columns.get(key)
@@ -3321,7 +3427,7 @@ with tab_ficha:
     latest_physique = get_latest_val("physique_rating")
     latest_bone = get_latest_val("bone_mass")
     latest_weight = get_latest_val("weight")
-    
+
     ref_col1, ref_col2 = st.columns([1.3, 1.0])
     with ref_col1:
         st.markdown("**Porcentaje de Grasa Corporal (Body Fat %)**")
@@ -3331,20 +3437,18 @@ with tab_ficha:
         render_table_html(get_bone_mass_table_html(user_gender, latest_weight, latest_bone))
 
     with ref_col2:
-        ref_col2_inner1, ref_col2_inner2 = st.columns(2)
-        with ref_col2_inner1:
-            st.markdown("**Agua Corporal (Body Water %)**")
-            render_table_html(get_body_water_table_html(user_gender, latest_water))
-        with ref_col2_inner2:
-            st.markdown("**Grasa Visceral**")
-            render_table_html(get_visceral_fat_table_html(latest_visceral))
+        st.markdown("**Agua Corporal (Body Water %)**")
+        render_table_html(get_body_water_table_html(user_gender, latest_water))
+
+        st.markdown("**Grasa Visceral**")
+        render_table_html(get_visceral_fat_table_html(latest_visceral))
 
         st.markdown("**Clasificación Física (Physique Rating)**")
         render_table_html(get_physique_table_html(latest_physique))
 
 with tab_graficos:
     render_summary_panels(processed_df, latest_row, metric_columns)
-    
+
     render_section_header(
         "Indicadores clave",
         "Panel principal con los últimos valores corporales y métricas complementarias del analizador.",
@@ -3358,25 +3462,26 @@ with tab_graficos:
             "Variables metabólicas y de composición adicionales detectadas en el archivo Tanita.",
         )
         render_metric_cards(latest_row, metric_columns, SECONDARY_KPI_KEYS, columns_per_row=4, prev_row=prev_row)
-        
+
     render_section_header(
         "Evolución longitudinal",
-        "Gráficas interactivas con una composición visual más cercana a un informe técnico de composición corporal.",
+        "Gráfica individual por métrica detectada en el archivo.",
     )
-    trend_left, trend_right = st.columns(2)
-    with trend_left:
-        weight_column = metric_columns.get("weight")
-        if weight_column:
-            render_metric_chart(processed_df, weight_column, "Evolución del peso", SOFT_COLORS["weight"])
-        else:
-            st.info("No se detectó la columna de peso para graficar la evolución.")
-    with trend_right:
-        render_composition_chart(processed_df, metric_columns)
-        
-    analysis_left, analysis_right = st.columns([1, 1.2])
-    with analysis_left:
-        render_metabolic_chart(processed_df, metric_columns)
-    with analysis_right:
+    _all_chart_keys = [k for k in PRIMARY_KPI_KEYS + SECONDARY_KPI_KEYS if metric_columns.get(k)]
+    for _i in range(0, len(_all_chart_keys), 2):
+        _chunk = _all_chart_keys[_i:_i + 2]
+        _chart_cols = st.columns(len(_chunk))
+        for _col, _key in zip(_chart_cols, _chunk):
+            with _col:
+                render_metric_chart(
+                    processed_df,
+                    metric_columns[_key],
+                    METRIC_CONFIG[_key]["label"],
+                    SOFT_COLORS[_key],
+                )
+
+    if segment_family and segment_columns:
+        render_section_header("Análisis segmental", "Distribución de masa por segmentos corporales.")
         render_segmental_chart(processed_df, segment_family, segment_columns)
 
 with tab_tabla:
@@ -3384,5 +3489,29 @@ with tab_tabla:
         "Tabla procesada",
         "Vista tabular final para validación, exportación y revisión de todos los registros interpretados.",
     )
-    st.dataframe(build_display_dataframe(processed_df), use_container_width=True, hide_index=True, height=380)
-
+    _can_edit = _source_mode == "folder" and _csv_path is not None
+    if _can_edit:
+        st.caption(
+            "Edición en línea habilitada · modifica celdas y pulsa **Guardar en CSV** para persistir los cambios."
+        )
+        _metric_edit_cols = [c for c in metric_columns.values() if c and c in processed_df.columns]
+        _edit_view = processed_df[["Fecha medición"] + _metric_edit_cols].copy()
+        _edit_view["Fecha medición"] = _edit_view["Fecha medición"].dt.strftime("%d/%m/%Y %H:%M")
+        _edited = st.data_editor(
+            _edit_view,
+            use_container_width=True,
+            hide_index=True,
+            height=400,
+            column_config={"Fecha medición": st.column_config.TextColumn("Fecha medición", disabled=True)},
+        )
+        if st.button("💾 Guardar cambios en CSV", type="primary"):
+            _save_df = processed_df.drop(columns=["Fecha medición"]).copy()
+            for _col in _metric_edit_cols:
+                if _col in _edited.columns:
+                    _save_df[_col] = _edited[_col].values
+            _save_df.to_csv(_csv_path, index=False)
+            process_csv.clear()
+            st.success("Cambios guardados en CSV.")
+            st.rerun()
+    else:
+        st.dataframe(build_display_dataframe(processed_df), use_container_width=True, hide_index=True, height=380)

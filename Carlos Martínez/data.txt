@@ -1,0 +1,5 @@
+Nombre: Carlos Martínez
+Edad: 28
+Genero: Masculino
+Altura: 1,81
+Nivel de actividad física: alto

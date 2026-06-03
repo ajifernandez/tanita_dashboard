@@ -1,6 +1,6 @@
-# Tanita BC-601 Dashboard
+# Dashboard para Bsicula Tanita
 
-Aplicación web en Streamlit para cargar `DATAX.CSV` de una báscula Tanita BC-601, limpiar los datos y visualizar su evolución con un formato listo para impresión clínica.
+Aplicación web en Streamlit para cargar `DATAX.CSV` de una báscula Tanita, limpiar los datos y visualizar su evolución con un formato listo para impresión clínica.
 
 ## Funcionalidades
 

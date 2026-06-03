@@ -1,0 +1,5 @@
+Nombre: Carmen López
+Edad: 45
+Genero: Femenino
+Altura: 1,59
+Nivel de actividad física: sedentario
