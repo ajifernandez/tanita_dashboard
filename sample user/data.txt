@@ -1,0 +1,5 @@
+Nombre: Sample User Name
+Edad: 39
+Genero: Masculino
+Altura: 1,85
+Nivel de actividad física: moderado
