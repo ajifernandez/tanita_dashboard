@@ -269,6 +269,21 @@ METRIC_CONFIG = {
         "higher_is_better": None,
         "aliases": ["physique rating", "classificacion fisica", "clasificación física", "body type", "physique"],
     },
+    "abdominal_circumference": {
+        "label": "Perímetro abdominal",
+        "suffix": "cm",
+        "decimals": 1,
+        "color": "#E8A87C",
+        "higher_is_better": False,
+        "aliases": [
+            "abdominal circumference",
+            "perimetro abdominal",
+            "perímetro abdominal",
+            "waist circumference",
+            "circunferencia abdominal",
+            "cintura",
+        ],
+    },
 }
 
 DISPLAY_NAMES = {metric: config["label"] for metric, config in METRIC_CONFIG.items()}
@@ -289,6 +304,7 @@ SECONDARY_KPI_KEYS = [
     "bmr",
     "daily_calorie_intake",
     "physique_rating",
+    "abdominal_circumference",
 ]
 COMPOSITION_TREND_KEYS = ["body_fat_pct", "muscle_mass", "total_body_water_pct", "bone_mass"]
 METABOLIC_TREND_KEYS = ["metabolic_age", "visceral_fat", "bmi", "bmr", "daily_calorie_intake"]
@@ -706,7 +722,7 @@ st.markdown(
             font-size: 0.8rem;
             font-weight: 600;
         }
-        .tanita-tracker-table .lang-de {
+        .tanita-tracker-table .lang-es {
             color: #5e7e9b;
             font-size: 0.72rem;
             font-weight: 500;
@@ -2158,8 +2174,8 @@ _TANITA_TABLE_CSS = """
   .tanita-tracker-table th { background: #edf5fc; color: #16324f; font-size: 0.78rem; font-weight: 700; }
   .tanita-tracker-table .metric-label-cell { text-align: left; background: #f4f8fc; color: #16324f;
              font-weight: 700; min-width: 170px; font-size: 0.83rem; padding-left: 0.75rem; }
-  .tanita-tracker-table .metric-label-cell .lang-en { display: block; color: #16324f; font-size: 0.82rem; font-weight: 700; }
-  .tanita-tracker-table .metric-label-cell .lang-de { display: block; color: #5e7e9b; font-size: 0.71rem; font-weight: 500; }
+  .tanita-tracker-table .metric-label-cell .lang-es { display: block; color: #16324f; font-size: 0.82rem; font-weight: 700; }
+  .tanita-tracker-table .metric-label-cell .lang-en { display: block; color: #5e7e9b; font-size: 0.71rem; font-weight: 500; }
   .tanita-tracker-table .metric-label-cell .lang-fr { display: block; color: #7b94ad; font-size: 0.71rem; font-weight: 500; }
   .tanita-ref-table { width: 100%; border-collapse: collapse; font-size: 0.78rem;
         background: #ffffff; border: 1px solid #d3dfeb;
@@ -2463,9 +2479,11 @@ def generate_tanita_tracker_table_html(dataframe: pd.DataFrame, metric_columns: 
         muscle = get_val("muscle_mass", 1)
         physique = get_val("physique_rating", 0)
         bone = get_val("bone_mass", 1)
+        metabolic_age = get_val("metabolic_age", 0)
+        bmi = get_val("bmi", 1)
+        abdominal = get_val("abdominal_circumference", 1)
         bmr = get_val("bmr", 0)
         dci = get_val("daily_calorie_intake", 0)
-        bmr_dci = f"{bmr} / {dci}" if (bmr or dci) else ""
 
         cols_data.append(
             {
@@ -2478,7 +2496,11 @@ def generate_tanita_tracker_table_html(dataframe: pd.DataFrame, metric_columns: 
                 "muscle": muscle,
                 "physique": physique,
                 "bone": bone,
-                "bmr_dci": bmr_dci,
+                "metabolic_age": metabolic_age,
+                "bmi": bmi,
+                "abdominal": abdominal,
+                "bmr": bmr,
+                "dci": dci,
             }
         )
 
@@ -2494,7 +2516,11 @@ def generate_tanita_tracker_table_html(dataframe: pd.DataFrame, metric_columns: 
                 "muscle": "",
                 "physique": "",
                 "bone": "",
-                "bmr_dci": "",
+                "metabolic_age": "",
+                "bmi": "",
+                "abdominal": "",
+                "bmr": "",
+                "dci": "",
             }
         )
 
@@ -2503,8 +2529,8 @@ def generate_tanita_tracker_table_html(dataframe: pd.DataFrame, metric_columns: 
         <thead>
             <tr>
                 <th class="metric-label-cell">
+                    <div class="lang-es">Fecha / Hora</div>
                     <div class="lang-en">Date / Time</div>
-                    <div class="lang-de">Fecha / Hora</div>
                 </th>
     """
     for col in cols_data:
@@ -2525,8 +2551,8 @@ def generate_tanita_tracker_table_html(dataframe: pd.DataFrame, metric_columns: 
     html += """
             <tr>
                 <td class="metric-label-cell">
+                    <div class="lang-es">% Grasa Corporal</div>
                     <div class="lang-en">Body Fat %</div>
-                    <div class="lang-de">% Grasa Corporal</div>
                 </td>
     """
     for col in cols_data:
@@ -2537,8 +2563,8 @@ def generate_tanita_tracker_table_html(dataframe: pd.DataFrame, metric_columns: 
     html += """
             <tr>
                 <td class="metric-label-cell">
+                    <div class="lang-es">Peso (kg)</div>
                     <div class="lang-en">Weight (kg)</div>
-                    <div class="lang-de">Peso (kg)</div>
                 </td>
     """
     for col in cols_data:
@@ -2549,8 +2575,8 @@ def generate_tanita_tracker_table_html(dataframe: pd.DataFrame, metric_columns: 
     html += """
             <tr>
                 <td class="metric-label-cell">
+                    <div class="lang-es">% Agua Corporal</div>
                     <div class="lang-en">Body Water %</div>
-                    <div class="lang-de">% Agua Corporal</div>
                 </td>
     """
     for col in cols_data:
@@ -2561,8 +2587,8 @@ def generate_tanita_tracker_table_html(dataframe: pd.DataFrame, metric_columns: 
     html += """
             <tr>
                 <td class="metric-label-cell">
+                    <div class="lang-es">Grasa Visceral</div>
                     <div class="lang-en">Visceral Fat</div>
-                    <div class="lang-de">Grasa Visceral</div>
                 </td>
     """
     for col in cols_data:
@@ -2573,8 +2599,8 @@ def generate_tanita_tracker_table_html(dataframe: pd.DataFrame, metric_columns: 
     html += """
             <tr>
                 <td class="metric-label-cell">
+                    <div class="lang-es">Masa Muscular (kg)</div>
                     <div class="lang-en">Muscle Mass (kg)</div>
-                    <div class="lang-de">Masa Muscular (kg)</div>
                 </td>
     """
     for col in cols_data:
@@ -2585,8 +2611,8 @@ def generate_tanita_tracker_table_html(dataframe: pd.DataFrame, metric_columns: 
     html += """
             <tr>
                 <td class="metric-label-cell">
+                    <div class="lang-es">Clasificación Física</div>
                     <div class="lang-en">Physique Rating</div>
-                    <div class="lang-de">Clasificación Física</div>
                 </td>
     """
     for col in cols_data:
@@ -2597,24 +2623,72 @@ def generate_tanita_tracker_table_html(dataframe: pd.DataFrame, metric_columns: 
     html += """
             <tr>
                 <td class="metric-label-cell">
+                    <div class="lang-es">Masa Ósea (kg)</div>
                     <div class="lang-en">Bone Mass (kg)</div>
-                    <div class="lang-de">Masa Ósea (kg)</div>
                 </td>
     """
     for col in cols_data:
         html += f"<td>{col['bone']}</td>"
     html += "</tr>"
 
-    # 8. BMR / DCI (kcal)
+    # 8. Metabolic Age
     html += """
             <tr>
                 <td class="metric-label-cell">
-                    <div class="lang-en">BMR / DCI (kcal)</div>
-                    <div class="lang-de">Metabolismo Basal / Ingesta Cal.</div>
+                    <div class="lang-es">Edad Metabólica</div>
+                    <div class="lang-en">Metabolic Age</div>
                 </td>
     """
     for col in cols_data:
-        html += f"<td>{col['bmr_dci']}</td>"
+        html += f"<td>{col['metabolic_age']}</td>"
+    html += "</tr>"
+
+    # 9. BMI
+    html += """
+            <tr>
+                <td class="metric-label-cell">
+                    <div class="lang-es">IMC</div>
+                    <div class="lang-en">BMI</div>
+                </td>
+    """
+    for col in cols_data:
+        html += f"<td>{col['bmi']}</td>"
+    html += "</tr>"
+
+    # 10. Abdominal Circumference (cm)
+    html += """
+            <tr>
+                <td class="metric-label-cell">
+                    <div class="lang-es">Perímetro Abdominal (cm)</div>
+                    <div class="lang-en">Abdominal Circumference (cm)</div>
+                </td>
+    """
+    for col in cols_data:
+        html += f"<td>{col['abdominal']}</td>"
+    html += "</tr>"
+
+    # 11. BMR (kcal)
+    html += """
+            <tr>
+                <td class="metric-label-cell">
+                    <div class="lang-es">Metabolismo Basal (kcal)</div>
+                    <div class="lang-en">BMR (kcal)</div>
+                </td>
+    """
+    for col in cols_data:
+        html += f"<td>{col['bmr']}</td>"
+    html += "</tr>"
+
+    # 12. Daily Calorie Intake (kcal)
+    html += """
+            <tr>
+                <td class="metric-label-cell">
+                    <div class="lang-es">Ingesta Calórica (kcal)</div>
+                    <div class="lang-en">Daily Calorie Intake (kcal)</div>
+                </td>
+    """
+    for col in cols_data:
+        html += f"<td>{col['dci']}</td>"
     html += "</tr>"
 
     html += """
@@ -3109,6 +3183,9 @@ def make_pdf_tracking_table(dataframe, metric_columns, styles, segment_family=No
     add_metric_row("Bone Mass (kg)", "Masa Ósea (kg)", "bone_mass", 1)
     add_metric_row("Metabolic Age", "Edad Metabólica", "metabolic_age", 0)
     add_metric_row("BMI", "IMC", "bmi", 1)
+    add_metric_row("Abdominal Circumference (cm)", "Perímetro Abdominal (cm)", "abdominal_circumference", 1)
+    add_metric_row("BMR (kcal)", "Metabolismo Basal (kcal)", "bmr", 0)
+    add_metric_row("Daily Calorie Intake (kcal)", "Ingesta Calórica (kcal)", "daily_calorie_intake", 0)
 
     if segment_family and segment_columns:
         _fam_en = "Fat" if segment_family == "fat" else "Muscle"
@@ -3119,26 +3196,6 @@ def make_pdf_tracking_table(dataframe, metric_columns, styles, segment_family=No
             p_en, p_es = _part_map.get(part, (part.title(), part.title()))
             s_en, s_es = _side_map.get(side, (side.title(), side.title()))
             add_col_row(f"{_fam_en} {p_en} {s_en}", f"{_fam_es} {p_es} {s_es}", col, 1)
-
-    bmr_dci_label = Paragraph(
-        "<b>BMR / DCI (kcal)</b><br/>" "<font color='#5e7e9b' size='5'>Metabolismo Basal / Ingesta Cal.</font>",
-        title_style,
-    )
-    bmr_row = [bmr_dci_label]
-    for _, r in rows_to_show.iterrows():
-        bmr_col = metric_columns.get("bmr")
-        dci_col = metric_columns.get("daily_calorie_intake")
-        bmr_val = float(r[bmr_col]) if bmr_col and bmr_col in r and not pd.isna(r[bmr_col]) else None
-        dci_val = float(r[dci_col]) if dci_col and dci_col in r and not pd.isna(r[dci_col]) else None
-        if bmr_val is not None or dci_val is not None:
-            bmr_str = f"{bmr_val:.0f}" if bmr_val is not None else "-"
-            dci_str = f"{dci_val:.0f}" if dci_val is not None else "-"
-            bmr_row.append(Paragraph(f"{bmr_str} / {dci_str}", value_style))
-        else:
-            bmr_row.append(Paragraph("", value_style))
-    for _ in range(num_padding):
-        bmr_row.append(Paragraph("", value_style))
-    table_data.append(bmr_row)
 
     t_style = [
         ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#c9d9ea")),
